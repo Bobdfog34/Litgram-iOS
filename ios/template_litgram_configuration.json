@@ -1,0 +1,14 @@
+{
+    "bundle_id": "org.litgram.ios",
+    "api_id": "4",
+    "api_hash": "014b35b6184100b085b0d0572f9b5103",
+    "team_id": "",
+    "app_center_id": "",
+    "is_internal_build": "true",
+    "is_appstore_build": "false",
+    "appstore_id": "",
+    "app_specific_url_scheme": "tg",
+    "premium_iap_product_id": "",
+    "enable_siri": false,
+    "enable_icloud": false
+}

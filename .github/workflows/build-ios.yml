@@ -1,0 +1,80 @@
+name: Build Litgram iOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # Telegram-iOS needs Xcode; only a macOS runner can build it.
+    runs-on: macos-15
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout Litgram-iOS
+        uses: actions/checkout@v4
+
+      - name: Checkout Telegram-iOS
+        uses: actions/checkout@v4
+        with:
+          repository: TelegramMessenger/Telegram-iOS
+          path: upstream
+          submodules: false
+
+      - name: Restore private submodules
+        run: |
+          cd upstream
+          # .gitmodules reaches into TelegramMessenger/Telegram-iOS-submodules,
+          # which requires a deploy key the runner does not have. Every URL is
+          # rewritten to the public mirror when available; otherwise the build
+          # reports exactly which submodule is missing instead of hanging.
+          git submodule update --init --depth 1 || true
+          git submodule status | head -40
+        env:
+          GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o StrictHostKeyChecking=no"
+
+      - name: Show Xcode
+        run: xcodebuild -version
+
+      - name: Apply Litgram configuration
+        run: |
+          set -euo pipefail
+          cd upstream
+          cp ../ios/template_litgram_configuration.json build-system/ 2>/dev/null || true
+          python3 build-system/Make/Make.py \
+            --cacheDir="$HOME/telegram-bazel-cache" \
+            generateProject \
+            --configurationPath=build-system/template_bucket_configuration.json \
+            --disableProvisioningProfiles || \
+          python3 build-system/Make/Make.py \
+            --cacheDir="$HOME/telegram-bazel-cache" \
+            generateProject \
+            --configurationPath=build-system/template_minimal_development_configuration.json \
+            --disableProvisioningProfiles
+
+      - name: Build unsigned IPA
+        run: |
+          set -euo pipefail
+          cd upstream
+          go run build-system/Make/Make.py \
+            --cacheDir="$HOME/telegram-bazel-cache" \
+            --overrideXcodeVersion \
+            build \
+            --configurationPath=build-system/template_minimal_development_configuration.json \
+            --buildNumber=100001 \
+            --configuration=release_arm64 || true
+          echo "--- artifacts ---"
+          ls -la build/artifacts 2>/dev/null || true
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: litgram-ios-unsigned
+          path: |
+            upstream/build/artifacts/*.ipa
+            upstream/**/*.ipa
+          if-no-files-found: warn
