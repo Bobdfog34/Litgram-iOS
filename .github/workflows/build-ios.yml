@@ -74,6 +74,7 @@ jobs:
           python3 build-system/Make/Make.py \
             --cacheDir="$HOME/telegram-bazel-cache" \
             --overrideXcodeVersion \
+            --bazelArguments="--//Telegram:disableExtensions" \
             generateProject \
             --configurationPath=build-system/litgram_configuration.json \
             --xcodeManagedCodesigning
@@ -82,12 +83,22 @@ jobs:
         run: |
           set -euo pipefail
           cd upstream
+          # --xcodeManagedCodesigning produces no provisioning profiles at all
+          # (XcodeManagedCodesigningSource.copy_profiles_to_destination is a no-op),
+          # so every `provisioning_profile` label on the extensions would fail
+          # analysis. `generateProject` sidesteps this by turning extensions off,
+          # but `build` does not, hence the explicit
+          # --//Telegram:disableExtensions here: the app is built without the
+          # Share/Notification/Widget/etc. extensions, which is exactly the
+          # unsigned artifact Sideloadly/AltStore installs.
           python3 build-system/Make/Make.py \
             --cacheDir="$HOME/telegram-bazel-cache" \
             --overrideXcodeVersion \
+            --bazelArguments="--//Telegram:disableExtensions" \
             build \
             --configurationPath=build-system/litgram_configuration.json \
             --xcodeManagedCodesigning \
+            --enableParallelSwiftmoduleGeneration \
             --buildNumber=100001 \
             --configuration=release_arm64 \
             --outputBuildArtifactsPath="$GITHUB_WORKSPACE/artifacts"
