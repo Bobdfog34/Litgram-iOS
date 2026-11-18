@@ -10,8 +10,9 @@ permissions:
 
 jobs:
   build:
-    # Telegram-iOS master requires Xcode 27.1; the xcode-27 image is the only
-    # GitHub-hosted macOS runner that ships it (macos-15 tops out at 16.x).
+    # Telegram-iOS master pins Xcode 27.1; xcode-27 is the only GitHub-hosted
+    # macOS image that ships it. --overrideXcodeVersion keeps Make.py from
+    # refusing whatever the image reports.
     runs-on: xcode-27
     timeout-minutes: 300
 
@@ -30,21 +31,20 @@ jobs:
         run: |
           cd upstream
           # .gitmodules points at TelegramMessenger/Telegram-iOS-submodules, which
-          # needs a deploy key we do not have. SubmoduleUpdateMode=checkout keeps
-          # going with whatever public submodules are reachable and reports the rest.
+          # needs a deploy key we do not have. Keep going with whatever public
+          # submodules are reachable and report the rest.
           git -c protocol.version=2 submodule update --init --depth 1 || true
           echo "--- submodule state ---"
           git submodule status | head -50 || true
-          echo "--- third-party/bazel ---"
-          ls -la third-party 2>/dev/null | head -20 || true
 
-      - name: Show Xcode
+      - name: Select Xcode
         run: |
           ls /Applications | grep -i xcode || true
-          # Make sure the newest Xcode is the active one even if the image default
-          # lags behind the version Make.py demands.
-          newest="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1 || true)"
-          if [ -n "$newest" ]; then sudo xcode-select -s "$newest"; fi
+          # Prefer the exact version Make.py expects; fall back to the default.
+          if [ -d /Applications/Xcode_27.1.app ]; then
+            sudo xcode-select -s /Applications/Xcode_27.1.app
+          fi
+          xcode-select -p
           xcodebuild -version
           python3 --version
 
@@ -52,8 +52,6 @@ jobs:
         run: |
           set -euo pipefail
           cd upstream
-          # Start from the upstream development template and override only what
-          # makes this build Litgram: bundle id, product name and API credentials.
           python3 - <<'PY'
           import json, pathlib
           template = pathlib.Path("build-system/template_minimal_development_configuration.json")
@@ -68,15 +66,15 @@ jobs:
         run: |
           set -euo pipefail
           cd upstream
-          # --xcodeManagedCodesigning is required by Make.py even for an unsigned
-          # build; no signing identity is configured, so the produced IPA stays
-          # unsigned and is installed via AltStore/Sideloadly.
+          # --xcodeManagedCodesigning makes Make.py use XcodeManagedCodesigningSource,
+          # whose aps-environment is "" — i.e. no real signing identity is needed and
+          # the produced IPA stays unsigned (installed later via AltStore/Sideloadly).
           python3 build-system/Make/Make.py \
             --cacheDir="$HOME/telegram-bazel-cache" \
+            --overrideXcodeVersion \
             generateProject \
             --configurationPath=build-system/litgram_configuration.json \
-            --xcodeManagedCodesigning \
-            --disableExtensions
+            --xcodeManagedCodesigning
 
       - name: Build IPA
         run: |
@@ -88,28 +86,19 @@ jobs:
             build \
             --configurationPath=build-system/litgram_configuration.json \
             --xcodeManagedCodesigning \
-            --disableExtensions \
             --buildNumber=100001 \
-            --configuration=release_arm64 || true
+            --configuration=release_arm64 \
+            --outputBuildArtifactsPath="$GITHUB_WORKSPACE/artifacts"
           echo "--- artifacts ---"
-          find build -name '*.ipa' -maxdepth 4 2>/dev/null || true
-          ls -la build/artifacts 2>/dev/null || true
+          ls -la "$GITHUB_WORKSPACE/artifacts" || true
 
       - name: Upload IPA
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: litgram-ios-unsigned
           path: |
-            upstream/build/artifacts/*.ipa
-            upstream/build/**/*.ipa
+            artifacts/*.ipa
+            upstream/bazel-bin/Telegram/Telegram.ipa
           if-no-files-found: warn
           retention-days: 14
-
-      - name: Upload build log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: litgram-ios-build-log
-          path: upstream/build/build.log
-          if-no-files-found: ignore
-          retention-days: 7
