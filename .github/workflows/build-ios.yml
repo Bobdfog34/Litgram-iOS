@@ -74,7 +74,6 @@ jobs:
           python3 build-system/Make/Make.py \
             --cacheDir="$HOME/telegram-bazel-cache" \
             --overrideXcodeVersion \
-            --bazelArguments="--//Telegram:disableExtensions" \
             generateProject \
             --configurationPath=build-system/litgram_configuration.json \
             --xcodeManagedCodesigning
@@ -84,17 +83,50 @@ jobs:
           set -euo pipefail
           cd upstream
           # --xcodeManagedCodesigning produces no provisioning profiles at all
-          # (XcodeManagedCodesigningSource.copy_profiles_to_destination is a no-op),
-          # so every `provisioning_profile` label on the extensions would fail
-          # analysis. `generateProject` sidesteps this by turning extensions off,
-          # but `build` does not, hence the explicit
-          # --//Telegram:disableExtensions here: the app is built without the
-          # Share/Notification/Widget/etc. extensions, which is exactly the
-          # unsigned artifact Sideloadly/AltStore installs.
+          # (XcodeManagedCodesigningSource.copy_profiles_to_destination is a
+          # no-op), so `@build_configuration//provisioning:Share.mobileprovision`
+          # — referenced unconditionally by //Telegram:ShareExtension — is not
+          # declared and analysis fails. `generateProject` dodges this by turning
+          # extensions off, but `build` does not, and Make.py's --bazelArguments
+          # flag is parsed yet never applied (dead code). So wrap the resolved
+          # bazel binary: the wrapper appends --//Telegram:disableExtensions to
+          # `build` invocations only, and the app is produced without the
+          # Share/Notification/Widget/Intents/BroadcastUpload extensions — which
+          # is exactly the unsigned artifact Sideloadly/AltStore installs.
+          python3 - <<'PY'
+          import glob, os, shutil
+
+          target = None
+          for pattern in ("build-input/bazel-*/bazel", "build-input/bazel-*"):
+              candidates = [
+                  path for path in glob.glob(pattern)
+                  if os.path.isfile(path) and not path.endswith(".real")
+              ]
+              if candidates:
+                  target = candidates[0]
+                  break
+          if target is None:
+              raise SystemExit("bazel binary not found under build-input/")
+
+          real = target + ".real"
+          if not os.path.exists(real):
+              shutil.move(target, real)
+
+          wrapper = """#!/bin/bash
+          ARGS=("$@")
+          if [ "${ARGS[0]:-}" = "build" ]; then
+            ARGS+=(--//Telegram:disableExtensions)
+          fi
+          exec "{real}" "${{ARGS[@]}}"
+          """.format(real=real)
+          with open(target, "w") as handle:
+              handle.write(wrapper)
+          os.chmod(target, 0o755)
+          print("bazel wrapper installed at", target)
+          PY
           python3 build-system/Make/Make.py \
             --cacheDir="$HOME/telegram-bazel-cache" \
             --overrideXcodeVersion \
-            --bazelArguments="--//Telegram:disableExtensions" \
             build \
             --configurationPath=build-system/litgram_configuration.json \
             --xcodeManagedCodesigning \
