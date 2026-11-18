@@ -134,6 +134,13 @@ def rewrite_profile(source, destination, bundle_id, cert_b64, identity, keychain
         profile["UUID"] = "litgram-" + bundle_id.replace(".", "-")
         entitlements["application-identifier"] = "{}.{}".format(team_id, bundle_id)
         entitlements["com.apple.developer.team-identifier"] = team_id
+        # rules_apple validates every entitlement of the target against the
+        # profile's Entitlements and fails with "uses entitlements
+        # com.apple.security.application-groups value of X, but the profile does
+        # not support it". The fixture profiles carry Telegram's group
+        # (group.ph.telegra.Telegraph) while the app declares ours, so the group
+        # list has to be rewritten to match the bundle being built.
+        entitlements["com.apple.security.application-groups"] = ["group." + bundle_id]
         # The finder matches TeamIdentifier[:] against the requested team id, so the
         # top-level list has to agree with the entitlement.
         profile["TeamIdentifier"] = [team_id]
