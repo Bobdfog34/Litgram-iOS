@@ -36,6 +36,7 @@ Run from the upstream checkout, after `generateProject`.
 """
 
 import base64
+import datetime
 import os
 import plistlib
 import subprocess
@@ -133,6 +134,14 @@ def rewrite_profile(source, destination, bundle_id, cert_b64, identity, keychain
         profile["UUID"] = "litgram-" + bundle_id.replace(".", "-")
         entitlements["application-identifier"] = "{}.{}".format(team_id, bundle_id)
         entitlements["com.apple.developer.team-identifier"] = team_id
+        # The finder matches TeamIdentifier[:] against the requested team id, so the
+        # top-level list has to agree with the entitlement.
+        profile["TeamIdentifier"] = [team_id]
+        # Expiry is irrelevant to the finder (it skips the check) but keep it
+        # clearly valid so nothing downstream rejects the profile on sight.
+        profile["ExpirationDate"] = datetime.datetime(2035, 1, 1, tzinfo=datetime.timezone.utc)
+        if "CreationDate" not in profile:
+            profile["CreationDate"] = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
         # A push entitlement would make codesign demand a real identity; the whole
         # point is an unsigned build.
         entitlements.pop("aps-environment", None)

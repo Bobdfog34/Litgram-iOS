@@ -64,6 +64,23 @@ jobs:
           print(json.dumps(cfg, indent=2))
           PY
 
+      - name: Install fake provisioning profiles
+        run: |
+          set -euo pipefail
+          cd upstream
+          # Must run BEFORE generateProject. rules_apple's
+          # `provisioning_profile_repository` symlinks
+          #   ~/Library/MobileDevice/Provisioning Profiles
+          # into bazel's external repo at creation time, and only files present at
+          # that moment are visible to local_provisioning_profile_finder. Installing
+          # the profiles afterwards, as an earlier attempt did, had no effect.
+          #
+          # The finder matches on the profile's Name ("iOS Team Provisioning
+          # Profile: <bundle id>") and TeamIdentifier. The repository ships fixtures
+          # and a self-signed certificate for exactly this: installing them satisfies
+          # the lookup without any Apple-signed material, so the IPA stays unsigned.
+          python3 ../ios/install_fake_profiles.py
+
       - name: Generate Xcode project (unsigned)
         run: |
           set -euo pipefail
@@ -83,27 +100,15 @@ jobs:
         run: |
           set -euo pipefail
           cd upstream
-          # `--xcodeManagedCodesigning` leaves the app target pointing at
-          # //Telegram:Telegram_local_profile, a local_provisioning_profile rule
-          # that shells out to local_provisioning_profile_finder. That tool scans
-          # ~/Library/MobileDevice/Provisioning Profiles and looks for a profile
-          # whose Name matches "iOS Team Provisioning Profile: <bundle id>"; on a
-          # GitHub-hosted runner nothing is installed, so the build aborts with
-          # "no provisioning profile was found named '...'".
-          #
-          # Turning the rule off is not an option: rules_apple rejects a device
-          # build without a provisioning_profile attribute
-          # ("Building for device, but no provisioning_profile attribute was set").
-          # `generate-verification-profiles` cannot help either: under
-          # --xcodeManagedCodesigning resolve_configuration copies no profiles, so
-          # it generates zero files.
-          #
-          # So re-sign the repository's fake profiles with the fixture certificate
-          # and install them where the finder looks. The profile Name is rewritten
-          # to the exact string the tool asks for. Nothing Apple-signed is involved:
-          # the certificate is build-system/fake-codesigning/certs/SelfSigned.p12,
-          # so the produced IPA stays unsigned.
+          # The profiles installed above must not be lost to a bazel repo refresh;
+          # re-assert them and drop any cached copy of the external repository so
+          # local_provisioning_profile_finder sees the full set.
           python3 ../ios/install_fake_profiles.py
+          bazel_cmd="$(ls build-input/bazel-* 2>/dev/null | head -1)"
+          if [ -n "$bazel_cmd" ]; then
+            "$bazel_cmd" shutdown || true
+          fi
+          ls -la "$HOME/Library/MobileDevice/Provisioning Profiles" || true
 
       - name: Build IPA
         run: |
