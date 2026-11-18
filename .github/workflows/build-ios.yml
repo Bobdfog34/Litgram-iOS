@@ -79,21 +79,17 @@ jobs:
             --configurationPath=build-system/litgram_configuration.json \
             --xcodeManagedCodesigning
 
-      - name: Install bazel extension wrapper
-        run: |
-          set -euo pipefail
-          cd upstream
-          python3 ../ios/install_bazel_wrapper.py
-
       - name: Build IPA
         run: |
           set -euo pipefail
           cd upstream
-          # The wrapper installed above appends --//Telegram:disableExtensions to
-          # `build`, so //Telegram:ShareExtension and friends are not analyzed and
-          # the missing provisioning profiles no longer abort the build. See
-          # ios/install_bazel_wrapper.py for the full explanation.
-          python3 build-system/Make/Make.py \
+          # --xcodeManagedCodesigning produces an empty provisioning package while
+          # the extensions reference @build_configuration//provisioning profiles
+          # unconditionally, and BazelLocation re-hashes (and re-downloads) the
+          # bazel binary, so neither the build flag nor a binary wrapper helps.
+          # make_unsigned_build.py patches the package between Make.py writing it
+          # and bazel reading it. See that file for the full explanation.
+          python3 ../ios/make_unsigned_build.py \
             --cacheDir="$HOME/telegram-bazel-cache" \
             --overrideXcodeVersion \
             build \
