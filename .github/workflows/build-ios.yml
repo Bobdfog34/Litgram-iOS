@@ -3,7 +3,7 @@ name: Build Litgram iOS
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, master]
 
 permissions:
   contents: read
@@ -12,7 +12,7 @@ jobs:
   build:
     # Telegram-iOS needs Xcode; only a macOS runner can build it.
     runs-on: macos-15
-    timeout-minutes: 180
+    timeout-minutes: 240
 
     steps:
       - name: Checkout Litgram-iOS
@@ -25,49 +25,68 @@ jobs:
           path: upstream
           submodules: false
 
-      - name: Restore private submodules
+      - name: Restore submodules
         run: |
           cd upstream
-          # .gitmodules reaches into TelegramMessenger/Telegram-iOS-submodules,
-          # which requires a deploy key the runner does not have. Every URL is
-          # rewritten to the public mirror when available; otherwise the build
-          # reports exactly which submodule is missing instead of hanging.
-          git submodule update --init --depth 1 || true
-          git submodule status | head -40
-        env:
-          GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o StrictHostKeyChecking=no"
+          # .gitmodules points at TelegramMessenger/Telegram-iOS-submodules, which
+          # needs a deploy key we do not have. SubmoduleUpdateMode=checkout keeps
+          # going with whatever public submodules are reachable and reports the rest.
+          git -c protocol.version=2 submodule update --init --depth 1 || true
+          echo "--- submodule state ---"
+          git submodule status | head -50 || true
+          echo "--- third-party/bazel ---"
+          ls -la third-party 2>/dev/null | head -20 || true
 
       - name: Show Xcode
-        run: xcodebuild -version
+        run: |
+          xcodebuild -version
+          python3 --version
 
-      - name: Apply Litgram configuration
+      - name: Prepare Litgram configuration
         run: |
           set -euo pipefail
           cd upstream
-          cp ../ios/template_litgram_configuration.json build-system/ 2>/dev/null || true
-          python3 build-system/Make/Make.py \
-            --cacheDir="$HOME/telegram-bazel-cache" \
-            generateProject \
-            --configurationPath=build-system/template_bucket_configuration.json \
-            --disableProvisioningProfiles || \
-          python3 build-system/Make/Make.py \
-            --cacheDir="$HOME/telegram-bazel-cache" \
-            generateProject \
-            --configurationPath=build-system/template_minimal_development_configuration.json \
-            --disableProvisioningProfiles
+          # Start from the upstream development template and override only what
+          # makes this build Litgram: bundle id, product name and API credentials.
+          python3 - <<'PY'
+          import json, pathlib
+          template = pathlib.Path("build-system/template_minimal_development_configuration.json")
+          cfg = json.loads(template.read_text())
+          ours = json.loads(pathlib.Path("../ios/template_litgram_configuration.json").read_text())
+          cfg.update({k: v for k, v in ours.items() if v not in ("", None)})
+          pathlib.Path("build-system/litgram_configuration.json").write_text(json.dumps(cfg, indent=4))
+          print(json.dumps(cfg, indent=2))
+          PY
 
-      - name: Build unsigned IPA
+      - name: Generate Xcode project (unsigned)
         run: |
           set -euo pipefail
           cd upstream
-          go run build-system/Make/Make.py \
+          # --xcodeManagedCodesigning is required by Make.py even for an unsigned
+          # build; no signing identity is configured, so the produced IPA stays
+          # unsigned and is installed via AltStore/Sideloadly.
+          python3 build-system/Make/Make.py \
+            --cacheDir="$HOME/telegram-bazel-cache" \
+            generateProject \
+            --configurationPath=build-system/litgram_configuration.json \
+            --xcodeManagedCodesigning \
+            --disableExtensions
+
+      - name: Build IPA
+        run: |
+          set -euo pipefail
+          cd upstream
+          python3 build-system/Make/Make.py \
             --cacheDir="$HOME/telegram-bazel-cache" \
             --overrideXcodeVersion \
             build \
-            --configurationPath=build-system/template_minimal_development_configuration.json \
+            --configurationPath=build-system/litgram_configuration.json \
+            --xcodeManagedCodesigning \
+            --disableExtensions \
             --buildNumber=100001 \
             --configuration=release_arm64 || true
           echo "--- artifacts ---"
+          find build -name '*.ipa' -maxdepth 4 2>/dev/null || true
           ls -la build/artifacts 2>/dev/null || true
 
       - name: Upload IPA
@@ -76,5 +95,15 @@ jobs:
           name: litgram-ios-unsigned
           path: |
             upstream/build/artifacts/*.ipa
-            upstream/**/*.ipa
+            upstream/build/**/*.ipa
           if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: litgram-ios-build-log
+          path: upstream/build/build.log
+          if-no-files-found: ignore
+          retention-days: 7
