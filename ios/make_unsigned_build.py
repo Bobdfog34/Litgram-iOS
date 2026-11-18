@@ -57,27 +57,27 @@ def install_profiles():
 
 
 def patch_bazel_args(command):
-    """Force a fully unsigned build.
+    """Force an unsigned, extension-less device build.
 
-    Two independent gates have to be opened:
+    Only `--//Telegram:disableExtensions` is set:
 
-    * `--//Telegram:disableExtensions` — extensions reference
-      `@build_configuration//provisioning:<Name>.mobileprovision`. Declaring those
-      files is not enough on CI: `//Telegram:Telegram_local_profile` is a
-      `local_provisioning_profile` rule that also shells out to
+    * Extensions reference `@build_configuration//provisioning:<Name>.mobileprovision`
+      and, on CI, also trigger `//Telegram:Telegram_local_profile` — a
+      `local_provisioning_profile` rule that shells out to
       `local_provisioning_profile_finder`, which looks the profile up in the
       runner's keychain and fails with "no provisioning profile was found named
-      'iOS Team Provisioning Profile: ...'". Disabling extensions removes both
-      the labels and the lookup.
+      'iOS Team Provisioning Profile: ...'". Disabling extensions removes both the
+      labels and that lookup.
 
-    * `--//Telegram:disableProvisioningProfiles` — the app target itself falls
-      back to `:Telegram_xcode_profile` when codesigning is Xcode-managed.
-      Without this flag bazel would still try to resolve a signed identity for
-      the application bundle.
+    * `--//Telegram:disableProvisioningProfiles` must NOT be used here: rules_apple
+      rejects a device build without a provisioning_profile attribute
+      ("Building for device, but no provisioning_profile attribute was set").
+      The app target keeps `:Telegram_xcode_profile`, which changes nothing about
+      the output because `telegram_aps_environment` is "" for Xcode-managed
+      codesigning — the IPA has no signing identity and installs via Sideloadly.
     """
     command = list(command)
     command.append("--//Telegram:disableExtensions")
-    command.append("--//Telegram:disableProvisioningProfiles")
     return command
 
 
