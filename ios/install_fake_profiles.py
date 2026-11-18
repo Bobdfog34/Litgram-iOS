@@ -38,7 +38,6 @@ Run from the upstream checkout, after `generateProject`.
 import base64
 import os
 import plistlib
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -109,8 +108,14 @@ def certificate_der(p12_path):
     return base64.b64encode(der).decode("utf-8")
 
 
-def resign_profile(source, destination, cert_b64, identity, keychain):
-    """Rewrite Name/identifier and re-sign the profile with the fixture cert."""
+def rewrite_profile(source, destination, bundle_id, cert_b64, identity, keychain):
+    """Rewrite Name/identifier, then re-sign the profile with the fixture cert.
+
+    Both steps happen on one decode: `security cms -D` only reads a profile that
+    is still signed by whatever it was signed with, and re-signing with the
+    fixture certificate produces a blob `security cms -D` refuses to decode again
+    ("failed to add data to decoder"). So mutate the plist once, then sign.
+    """
     raw = run(["security", "cms", "-D", "-i", source])
     with tempfile.NamedTemporaryFile("wb", suffix=".plist", delete=False) as handle:
         handle.write(raw)
@@ -119,7 +124,18 @@ def resign_profile(source, destination, cert_b64, identity, keychain):
         with open(plist_path, "rb") as handle:
             profile = plistlib.load(handle)
 
-        profile.setdefault("Entitlements", {})
+        entitlements = profile.setdefault("Entitlements", {})
+        old_id = entitlements.get("application-identifier", "")
+        team_id = old_id.split(".")[0] if "." in old_id else "ABCDE12345"
+
+        # local_provisioning_profile_finder matches on Name for this bundle id.
+        profile["Name"] = "iOS Team Provisioning Profile: " + bundle_id
+        profile["UUID"] = "litgram-" + bundle_id.replace(".", "-")
+        entitlements["application-identifier"] = "{}.{}".format(team_id, bundle_id)
+        entitlements["com.apple.developer.team-identifier"] = team_id
+        # A push entitlement would make codesign demand a real identity; the whole
+        # point is an unsigned build.
+        entitlements.pop("aps-environment", None)
         profile["DeveloperCertificates"] = [base64.b64decode(cert_b64)]
         profile.pop("DER-Encoded-Profile", None)
 
@@ -128,37 +144,6 @@ def resign_profile(source, destination, cert_b64, identity, keychain):
 
         run(["security", "cms", "-S", "-k", keychain, "-N", identity,
              "-i", plist_path, "-o", destination])
-    finally:
-        os.unlink(plist_path)
-
-
-def rename_profile(source, destination, bundle_id):
-    """Set Name/UUID/application-identifier so the finder matches this bundle."""
-    raw = run(["security", "cms", "-D", "-i", source])
-    with tempfile.NamedTemporaryFile("wb", suffix=".plist", delete=False) as handle:
-        handle.write(raw)
-        plist_path = handle.name
-    try:
-        with open(plist_path, "rb") as handle:
-            profile = plistlib.load(handle)
-
-        old_id = profile.get("Entitlements", {}).get("application-identifier", "")
-        team_id = old_id.split(".")[0] if "." in old_id else "ABCDE12345"
-
-        profile["Name"] = "iOS Team Provisioning Profile: " + bundle_id
-        profile["UUID"] = "litgram-" + bundle_id.replace(".", "-")
-        entitlements = profile.setdefault("Entitlements", {})
-        entitlements["application-identifier"] = "{}.{}".format(team_id, bundle_id)
-        # Keep the query string in step with the identifier; the finder compares
-        # bundle ids, and a stale wildcard entry would not match.
-        entitlements["com.apple.developer.team-identifier"] = team_id
-        entitlements.pop("aps-environment", None)
-        profile.pop("DER-Encoded-Profile", None)
-        profile.pop("DeveloperCertificates", None)
-
-        with open(plist_path, "wb") as handle:
-            plistlib.dump(profile, handle)
-        shutil.copyfile(plist_path, destination)
     finally:
         os.unlink(plist_path)
 
@@ -176,24 +161,15 @@ def main():
     print("using signing identity:", identity)
 
     installed = []
-    workdir = tempfile.mkdtemp()
-    try:
-        for bundle_id, fixture in PROFILES.items():
-            source = os.path.join(PROFILES_SOURCE, fixture)
-            if not os.path.isfile(source):
-                print("skipping missing fixture:", source)
-                continue
-            renamed = os.path.join(workdir, fixture)
-            rename_profile(source, renamed, bundle_id)
-            signed = os.path.join(workdir, "signed-" + fixture)
-            resign_profile(renamed, signed, cert_b64, identity, keychain)
-
-            destination = os.path.join(INSTALL_DIR, "litgram-{}.mobileprovision".format(
-                bundle_id.replace(".", "-")))
-            shutil.copyfile(signed, destination)
-            installed.append(bundle_id)
-    finally:
-        shutil.rmtree(workdir, ignore_errors=True)
+    for bundle_id, fixture in PROFILES.items():
+        source = os.path.join(PROFILES_SOURCE, fixture)
+        if not os.path.isfile(source):
+            print("skipping missing fixture:", source)
+            continue
+        destination = os.path.join(INSTALL_DIR, "litgram-{}.mobileprovision".format(
+            bundle_id.replace(".", "-")))
+        rewrite_profile(source, destination, bundle_id, cert_b64, identity, keychain)
+        installed.append(bundle_id)
 
     print("installed {} profiles into {}".format(len(installed), INSTALL_DIR))
     for bundle_id in installed:
