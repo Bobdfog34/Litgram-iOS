@@ -57,7 +57,9 @@ jobs:
           template = pathlib.Path("build-system/template_minimal_development_configuration.json")
           cfg = json.loads(template.read_text())
           ours = json.loads(pathlib.Path("../ios/template_litgram_configuration.json").read_text())
-          cfg.update({k: v for k, v in ours.items() if v not in ("", None)})
+          # Replace wholesale: the template ships "{! check README.md !}" style
+          # placeholders, and leaving any key empty makes bazel choke on them.
+          cfg.update(ours)
           pathlib.Path("build-system/litgram_configuration.json").write_text(json.dumps(cfg, indent=4))
           print(json.dumps(cfg, indent=2))
           PY
