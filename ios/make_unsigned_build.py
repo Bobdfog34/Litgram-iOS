@@ -56,6 +56,31 @@ def install_profiles():
     print("[litgram] provisioning package declares {} profiles".format(len(copied)))
 
 
+def patch_bazel_args(command):
+    """Force a fully unsigned build.
+
+    Two independent gates have to be opened:
+
+    * `--//Telegram:disableExtensions` — extensions reference
+      `@build_configuration//provisioning:<Name>.mobileprovision`. Declaring those
+      files is not enough on CI: `//Telegram:Telegram_local_profile` is a
+      `local_provisioning_profile` rule that also shells out to
+      `local_provisioning_profile_finder`, which looks the profile up in the
+      runner's keychain and fails with "no provisioning profile was found named
+      'iOS Team Provisioning Profile: ...'". Disabling extensions removes both
+      the labels and the lookup.
+
+    * `--//Telegram:disableProvisioningProfiles` — the app target itself falls
+      back to `:Telegram_xcode_profile` when codesigning is Xcode-managed.
+      Without this flag bazel would still try to resolve a signed identity for
+      the application bundle.
+    """
+    command = list(command)
+    command.append("--//Telegram:disableExtensions")
+    command.append("--//Telegram:disableProvisioningProfiles")
+    return command
+
+
 def main():
     sys.path.insert(0, os.path.join(os.getcwd(), "build-system", "Make"))
     import BuildEnvironment  # noqa: E402  (path set above)
@@ -68,6 +93,8 @@ def main():
         # call (killall, curl, zip, ...) runs unchanged.
         if not patched_state["done"] and command and os.path.basename(str(command[0])).startswith("bazel-"):
             install_profiles()
+            command = patch_bazel_args(command)
+            print("[litgram] bazel build args:", " ".join(command))
             patched_state["done"] = True
         return original(command, **kwargs)
 
