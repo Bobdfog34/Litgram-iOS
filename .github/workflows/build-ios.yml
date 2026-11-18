@@ -10,9 +10,10 @@ permissions:
 
 jobs:
   build:
-    # Telegram-iOS needs Xcode; only a macOS runner can build it.
-    runs-on: macos-15
-    timeout-minutes: 240
+    # Telegram-iOS master requires Xcode 27.1; the xcode-27 image is the only
+    # GitHub-hosted macOS runner that ships it (macos-15 tops out at 16.x).
+    runs-on: xcode-27
+    timeout-minutes: 300
 
     steps:
       - name: Checkout Litgram-iOS
@@ -39,6 +40,11 @@ jobs:
 
       - name: Show Xcode
         run: |
+          ls /Applications | grep -i xcode || true
+          # Make sure the newest Xcode is the active one even if the image default
+          # lags behind the version Make.py demands.
+          newest="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1 || true)"
+          if [ -n "$newest" ]; then sudo xcode-select -s "$newest"; fi
           xcodebuild -version
           python3 --version
 
