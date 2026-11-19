@@ -23,6 +23,7 @@ Usage (from the upstream checkout):
 import os
 import runpy
 import shutil
+import subprocess
 import sys
 
 PROFILES_SOURCE = "build-system/fake-codesigning/profiles"
@@ -39,21 +40,21 @@ REQUIRED_PROFILES = [
 
 
 def install_profiles():
-    """Declare the fake profiles in the provisioning package."""
-    os.makedirs(PROVISIONING_DIR, exist_ok=True)
-    copied = []
-    for name in REQUIRED_PROFILES:
-        source = os.path.join(PROFILES_SOURCE, name)
-        if not os.path.isfile(source):
-            raise SystemExit("missing provisioning fixture: " + source)
-        shutil.copyfile(source, os.path.join(PROVISIONING_DIR, name))
-        copied.append(name)
-    lines = ["exports_files(["]
-    lines.extend('    "{}",'.format(name) for name in sorted(copied))
-    lines.append("])")
-    with open(os.path.join(PROVISIONING_DIR, "BUILD"), "w", encoding="utf-8") as handle:
-        handle.write("\n".join(lines) + "\n")
-    print("[litgram] provisioning package declares {} profiles".format(len(copied)))
+    """Install the rewritten profiles where both consumers look for them.
+
+    Delegates to install_fake_profiles.py, which re-signs each fixture with the
+    fake certificate and rewrites its bundle id, team id and application group to
+    match the app being built. Copying the original fixtures here (the previous
+    behaviour) left "ph.telegra.Telegraph.Share" inside the profile, and analysis
+    then failed with:
+        the bundle_id ("org.litgram.ios.Share") did not match the id in the
+        entitlements ("ph.telegra.Telegraph.Share")
+    """
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "install_fake_profiles.py")
+    result = subprocess.run([sys.executable, script], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit("install_fake_profiles.py failed:\n" + result.stdout + result.stderr)
+    print(result.stdout.strip())
 
 
 def patch_bazel_args(command):

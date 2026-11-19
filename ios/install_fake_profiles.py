@@ -39,11 +39,13 @@ import base64
 import datetime
 import os
 import plistlib
+import shutil
 import subprocess
 import sys
 import tempfile
 
 PROFILES_SOURCE = "build-system/fake-codesigning/profiles"
+PROVISIONING_DIR = "build-input/configuration-repository/provisioning"
 CERT_PATH = "build-system/fake-codesigning/certs/SelfSigned.p12"
 INSTALL_DIR = os.path.expanduser("~/Library/MobileDevice/Provisioning Profiles")
 
@@ -190,6 +192,26 @@ def main():
     print("installed {} profiles into {}".format(len(installed), INSTALL_DIR))
     for bundle_id in installed:
         print("  - iOS Team Provisioning Profile:", bundle_id)
+
+    # `ios_extension` targets in Telegram/BUILD reference
+    # @build_configuration//provisioning:<Name>.mobileprovision directly (see
+    # ShareExtension's provisioning_profile select). make_unsigned_build.py resets
+    # that package before bazel runs, so the profiles have to be put back there
+    # too, under the exact fixture names the BUILD file asks for.
+    os.makedirs(PROVISIONING_DIR, exist_ok=True)
+    declared = []
+    for fixture in sorted(set(PROFILES.values())):
+        source = os.path.join(PROFILES_SOURCE, fixture)
+        if not os.path.isfile(source):
+            continue
+        shutil.copyfile(source, os.path.join(PROVISIONING_DIR, fixture))
+        declared.append(fixture)
+    lines = ["exports_files(["]
+    lines.extend('    "{}",'.format(name) for name in declared)
+    lines.append("])")
+    with open(os.path.join(PROVISIONING_DIR, "BUILD"), "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+    print("provisioning package declares {} fixture profiles".format(len(declared)))
 
 
 if __name__ == "__main__":
