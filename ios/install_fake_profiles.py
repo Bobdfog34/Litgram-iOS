@@ -195,23 +195,31 @@ def main():
 
     # `ios_extension` targets in Telegram/BUILD reference
     # @build_configuration//provisioning:<Name>.mobileprovision directly (see
-    # ShareExtension's provisioning_profile select). make_unsigned_build.py resets
-    # that package before bazel runs, so the profiles have to be put back there
-    # too, under the exact fixture names the BUILD file asks for.
+    # ShareExtension's provisioning_profile select), and plisttool reads the
+    # extension's application-identifier out of THAT file. Copying the raw fixture
+    # therefore failed with:
+    #   the bundle_id ("org.litgram.ios.Share") did not match the id in the
+    #   entitlements ("ph.telegra.Telegraph.Share")
+    # The rewritten profile (correct bundle id, team id and app group) has to go
+    # in its place, under the fixture name the BUILD file asks for.
     os.makedirs(PROVISIONING_DIR, exist_ok=True)
     declared = []
-    for fixture in sorted(set(PROFILES.values())):
+    for bundle_id, fixture in sorted(PROFILES.items()):
         source = os.path.join(PROFILES_SOURCE, fixture)
         if not os.path.isfile(source):
             continue
-        shutil.copyfile(source, os.path.join(PROVISIONING_DIR, fixture))
+        rewritten = os.path.join(INSTALL_DIR, "litgram-{}.mobileprovision".format(
+            bundle_id.replace(".", "-")))
+        if not os.path.isfile(rewritten):
+            continue
+        shutil.copyfile(rewritten, os.path.join(PROVISIONING_DIR, fixture))
         declared.append(fixture)
     lines = ["exports_files(["]
-    lines.extend('    "{}",'.format(name) for name in declared)
+    lines.extend('    "{}",'.format(name) for name in sorted(declared))
     lines.append("])")
     with open(os.path.join(PROVISIONING_DIR, "BUILD"), "w", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
-    print("provisioning package declares {} fixture profiles".format(len(declared)))
+    print("provisioning package declares {} rewritten profiles".format(len(declared)))
 
 
 if __name__ == "__main__":
