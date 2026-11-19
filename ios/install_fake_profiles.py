@@ -49,6 +49,10 @@ PROVISIONING_DIR = "build-input/configuration-repository/provisioning"
 CERT_PATH = "build-system/fake-codesigning/certs/SelfSigned.p12"
 INSTALL_DIR = os.path.expanduser("~/Library/MobileDevice/Provisioning Profiles")
 
+# The main app's bundle id. Extensions share this app's application group
+# (group.<app bundle id>), which is what Telegram/BUILD declares for all of them.
+APP_BUNDLE_ID = "org.litgram.ios"
+
 # bundle id -> (fixture profile, Name the finder asks for)
 # local_provisioning_profile_finder requests "iOS Team Provisioning Profile: <id>"
 # for the app and for every extension; the .appex ones are not reached because
@@ -139,10 +143,10 @@ def rewrite_profile(source, destination, bundle_id, cert_b64, identity, keychain
         # rules_apple validates every entitlement of the target against the
         # profile's Entitlements and fails with "uses entitlements
         # com.apple.security.application-groups value of X, but the profile does
-        # not support it". The fixture profiles carry Telegram's group
-        # (group.ph.telegra.Telegraph) while the app declares ours, so the group
-        # list has to be rewritten to match the bundle being built.
-        entitlements["com.apple.security.application-groups"] = ["group." + bundle_id]
+        # not support it". Extensions share the MAIN app's group (Telegram's own
+        # BUILD declares group.{telegram_bundle_id} for every extension), so the
+        # group is derived from the app bundle id, not from this target's id.
+        entitlements["com.apple.security.application-groups"] = ["group." + APP_BUNDLE_ID]
         # The finder matches TeamIdentifier[:] against the requested team id, so the
         # top-level list has to agree with the entitlement.
         profile["TeamIdentifier"] = [team_id]
