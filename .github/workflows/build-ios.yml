@@ -114,16 +114,58 @@ jobs:
         run: |
           set -euo pipefail
           cd upstream
-          python3 ../ios/make_unsigned_build.py \
-            --cacheDir="$HOME/telegram-bazel-cache" \
-            --overrideXcodeVersion \
-            build \
-            --configurationPath=build-system/litgram_configuration.json \
-            --xcodeManagedCodesigning \
-            --enableParallelSwiftmoduleGeneration \
-            --buildNumber=100001 \
-            --configuration=release_arm64 \
-            --outputBuildArtifactsPath="$GITHUB_WORKSPACE/artifacts"
+          # Build through the generated Xcode project, not `bazel build`.
+          #
+          # `Make.py build --xcodeManagedCodesigning` produced an IPA whose main
+          # executable was 154 KB while TelegramUIFramework was 117 MB: the entry
+          # point stayed a stub and the installed app showed only a black screen.
+          # Linking through xcodebuild (the path Xcode itself takes for the
+          # generated project) produces a real app binary.
+          #
+          # CODE_SIGNING_ALLOWED=NO keeps the result unsigned: the fake profiles
+          # installed above only exist so rules_apple can analyse the targets.
+          PROJECT=$(ls -d Telegram/Telegram.xcodeproj 2>/dev/null || ls -d *.xcodeproj 2>/dev/null | head -1)
+          echo "project: $PROJECT"
+          if [ -z "$PROJECT" ]; then
+            echo "no .xcodeproj generated; falling back to the bazel build" >&2
+            python3 ../ios/make_unsigned_build.py \
+              --cacheDir="$HOME/telegram-bazel-cache" \
+              --overrideXcodeVersion \
+              build \
+              --configurationPath=build-system/litgram_configuration.json \
+              --xcodeManagedCodesigning \
+              --enableParallelSwiftmoduleGeneration \
+              --buildNumber=100001 \
+              --configuration=release_arm64 \
+              --outputBuildArtifactsPath="$GITHUB_WORKSPACE/artifacts"
+          else
+            SCHEME=$(xcodebuild -list -project "$PROJECT" -json 2>/dev/null |
+              python3 -c "import json,sys; d=json.load(sys.stdin)['project']; s=d.get('schemes') or []; print('Telegram' if 'Telegram' in s else (s[0] if s else ''))")
+            echo "scheme: $SCHEME"
+            rm -rf "$RUNNER_TEMP/derived"
+            xcodebuild \
+              -project "$PROJECT" \
+              -scheme "$SCHEME" \
+              -configuration Release \
+              -sdk iphoneos \
+              -destination 'generic/platform=iOS' \
+              -derivedDataPath "$RUNNER_TEMP/derived" \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY="" \
+              CODE_SIGN_ENTITLEMENTS="" \
+              build
+
+            APP="$RUNNER_TEMP/derived/Build/Products/Release-iphoneos/Telegram.app"
+            echo "--- built app ---"
+            ls -la "$APP" | head -20
+            du -sh "$APP/Telegram" || true
+
+            mkdir -p "$GITHUB_WORKSPACE/artifacts/Payload"
+            cp -R "$APP" "$GITHUB_WORKSPACE/artifacts/Payload/"
+            ( cd "$GITHUB_WORKSPACE/artifacts" && zip -qry Telegram.ipa Payload )
+            rm -rf "$GITHUB_WORKSPACE/artifacts/Payload"
+          fi
           echo "--- artifacts ---"
           ls -la "$GITHUB_WORKSPACE/artifacts" || true
 
