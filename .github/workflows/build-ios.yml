@@ -143,18 +143,41 @@ jobs:
               python3 -c "import json,sys; d=json.load(sys.stdin)['project']; s=d.get('schemes') or []; print('Telegram' if 'Telegram' in s else (s[0] if s else ''))")
             echo "scheme: $SCHEME"
             rm -rf "$RUNNER_TEMP/derived"
-            xcodebuild \
-              -project "$PROJECT" \
-              -scheme "$SCHEME" \
-              -configuration Release \
-              -sdk iphoneos \
-              -destination 'generic/platform=iOS' \
-              -derivedDataPath "$RUNNER_TEMP/derived" \
-              CODE_SIGNING_ALLOWED=NO \
-              CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGN_IDENTITY="" \
-              CODE_SIGN_ENTITLEMENTS="" \
-              build
+            # Run xcodebuild in the background and echo a heartbeat every minute
+            # so a multi-hour compile does not sit silent on the runner's log
+            # pipe. The exit status is read from `wait`, so a failure still fails
+            # the step.
+            (
+              xcodebuild \
+                -project "$PROJECT" \
+                -scheme "$SCHEME" \
+                -configuration Release \
+                -sdk iphoneos \
+                -destination 'generic/platform=iOS' \
+                -derivedDataPath "$RUNNER_TEMP/derived" \
+                -quiet \
+                CODE_SIGNING_ALLOWED=NO \
+                CODE_SIGNING_REQUIRED=NO \
+                CODE_SIGN_IDENTITY="" \
+                CODE_SIGN_ENTITLEMENTS="" \
+                build > "$RUNNER_TEMP/xcodebuild.log" 2>&1
+              echo $? > "$RUNNER_TEMP/xcodebuild.status"
+            ) &
+            BUILD_PID=$!
+            trap 'kill -TERM $BUILD_PID 2>/dev/null || true' INT TERM
+            while kill -0 "$BUILD_PID" 2>/dev/null; do
+              sleep 60
+              echo "[$(date -u +%H:%M:%S)] xcodebuild running"
+            done
+            wait "$BUILD_PID" || true
+            trap - INT TERM
+            STATUS=$(cat "$RUNNER_TEMP/xcodebuild.status" 2>/dev/null || echo 1)
+            echo "--- xcodebuild output (tail) ---"
+            tail -60 "$RUNNER_TEMP/xcodebuild.log" || true
+            if [ "$STATUS" != "0" ]; then
+              echo "xcodebuild exited with $STATUS" >&2
+              exit "$STATUS"
+            fi
 
             APP="$RUNNER_TEMP/derived/Build/Products/Release-iphoneos/Telegram.app"
             echo "--- built app ---"
