@@ -197,7 +197,29 @@ jobs:
               exit "$STATUS"
             fi
 
-            APP="$RUNNER_TEMP/derived/Build/Products/Release-iphoneos/Telegram.app"
+            # The generated project does NOT put the app directly in
+            # Release-iphoneos: xcodebuild logs showed it at
+            # Release-iphoneos/bazel-out/ios_arm64-.../bin/Telegram/Telegram.app.
+            # The hardcoded path made a successful build fail before packaging.
+            APP=$(find "$RUNNER_TEMP/derived/Build/Products" -type d -name Telegram.app -print -quit 2>/dev/null || true)
+            echo "app: $APP"
+            if [ -z "$APP" ]; then
+              echo "xcodebuild reported success but produced no Telegram.app" >&2
+              find "$RUNNER_TEMP/derived/Build/Products" -maxdepth 5 -type d | head -40 || true
+              exit 1
+            fi
+
+            # Make.py builds used to leave a 154 KB entry point while the real
+            # code lived in TelegramUIFramework; that IPA booted to a black
+            # screen. Never upload another one.
+            EXE_BYTES=$(stat -f%z "$APP/Telegram" 2>/dev/null || echo 0)
+            echo "executable_bytes: $EXE_BYTES"
+            if [ "$EXE_BYTES" -lt 1048576 ]; then
+              echo "main executable is a stub ($EXE_BYTES bytes); refusing to ship a black-screen IPA" >&2
+              exit 1
+            fi
+            APPEX=$(find "$APP/PlugIns" -maxdepth 1 -type d -name '*.appex' 2>/dev/null | wc -l | tr -d ' ')
+            echo "appex_count: $APPEX"
             echo "--- built app ---"
             ls -la "$APP" | head -20
             du -sh "$APP/Telegram" || true
