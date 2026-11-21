@@ -37,6 +37,24 @@ jobs:
           echo "--- submodule state ---"
           git submodule status | head -50 || true
 
+      - name: Cache bazel outputs
+        # The build reached 10,177/10,177 actions and still ran out of the job's
+        # time budget, because every run starts from an empty Bazel disk cache.
+        # Persisting it between runs turns the second and later builds into a
+        # mostly cache-hit pass, which is the difference between "times out at
+        # three hours" and "finishes with room to spare".
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/telegram-bazel-cache
+            ~/.cache/bazel
+          # Keyed on the generated project input, so a configuration change
+          # invalidates it but a source-only commit reuses it.
+          key: bazel-${{ runner.os }}-${{ hashFiles('ios/template_litgram_configuration.json') }}-${{ github.sha }}
+          restore-keys: |
+            bazel-${{ runner.os }}-${{ hashFiles('ios/template_litgram_configuration.json') }}-
+            bazel-${{ runner.os }}-
+
       - name: Select Xcode
         run: |
           ls /Applications | grep -i xcode || true
